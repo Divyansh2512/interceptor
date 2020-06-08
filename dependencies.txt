@@ -1,0 +1,3 @@
+scapy
+termcolor
+git+https://github.com/kti/python-netfilterqueue
