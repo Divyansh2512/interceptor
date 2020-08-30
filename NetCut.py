@@ -4,11 +4,13 @@ import scapy.all as scapy
 import os
 import subprocess
 import netifaces
+import requests
 import netfilterqueue
 import threading
 import sys
 import time
 from termcolor import colored
+from bs4 import BeautifulSoup
 
 
 def has_root():
@@ -30,7 +32,21 @@ def connected_clients(gateway_address, ip_range):
     for client in response:
         client_info = {"ip" : client[1].psrc, "mac" : client[1].src}
         clients.append(client_info)
-    return clients
+    updated_clients = get_vendor_info(clients)
+    return updated_clients
+
+
+def get_vendor_info(clients):
+	query = "https://www.ipchecktool.com/tool/macfinder?oui="
+	for client in clients:
+		url = query + client["mac"].replace(':', "%3A")
+		response = requests.get(url)
+		soup = BeautifulSoup(response.text, 'html.parser')
+		tag = soup.find("table", {"class":"table"})
+		info = tag.find_all('td')
+		vendor = info[1].text
+		client["vendor"] = vendor
+	return clients
 
 
 class ARPSpoof:
@@ -84,10 +100,11 @@ class ARPSpoof:
 
 def prompt_for_targets(clients):
     for i, client in enumerate(clients, 1):
-        info = "[{index}]\t\t{ip_addr}\t\t{mac_addr}".format(
+        info = "[{index}]\t{ip_addr}\t{mac_addr}\t{vendor}".format(
             index=i,
             ip_addr=client["ip"],
-            mac_addr=client["mac"]
+            mac_addr=client["mac"],
+            vendor=client["vendor"]
         )
         print(colored(info, "cyan"))
 
@@ -147,4 +164,3 @@ if __name__ == '__main__':
         pass
     finally:
         network.restore()
-
