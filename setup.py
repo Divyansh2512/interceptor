@@ -12,9 +12,8 @@ if not has_root():
   sys.exit(1)
 else:
   print("[+] Running as Root")
-  print("[+] Installing Deppendies....")
+  print("[+] Installing Dependencies....")
   time.sleep(2)
   system("apt-get update")
   system("apt-get install build-essential python-dev libnetfilter-queue-dev")
   system("pip3 install -r dependencies.txt")
-
