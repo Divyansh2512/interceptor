@@ -9,6 +9,7 @@ import netfilterqueue
 import threading
 import sys
 import time
+import argparse
 from termcolor import colored
 from bs4 import BeautifulSoup
 
@@ -17,36 +18,53 @@ def has_root():
     return os.geteuid() == 0
 
 
+def get_arguments():
+	parser = argparse.ArgumentParser()
+	parser.add_argument(
+		"-i",
+		"--ip_range",
+		help = "Range to find connected devices"
+	)
+
+	args = parser.parse_args()
+	if not args.ip_range:
+		parser.error("[-] Please specify an IP range")
+	return args
+
+
 def gateway_address():
     gateways = netifaces.gateways()
     default_address = gateways["default"][netifaces.AF_INET][0]
     return default_address
 
 
-def connected_clients(gateway_address, ip_range):
-    arp_request = scapy.ARP(pdst=ip_range)
-    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-    arp_request_broadcast = broadcast/arp_request
-    response = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
-    clients = []
-    for client in response:
-        client_info = {"ip" : client[1].psrc, "mac" : client[1].src}
-        clients.append(client_info)
-    updated_clients = get_vendor_info(clients)
-    return updated_clients
+class ClientsInfo:
+    def __init__(self, ip_range):
+        self.ip_range = ip_range
 
+    def connected_clients(self):
+        arp_request = scapy.ARP(pdst=self.ip_range)
+        broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+        arp_request_broadcast = broadcast/arp_request
+        response = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
+        clients = []
+        for client in response:
+            client_info = {"ip" : client[1].psrc, "mac" : client[1].src}
+            clients.append(client_info)
+        updated_clients = self.get_vendor_info(clients)
+        return updated_clients
 
-def get_vendor_info(clients):
-	query = "https://www.ipchecktool.com/tool/macfinder?oui="
-	for client in clients:
-		url = query + client["mac"].replace(':', "%3A")
-		response = requests.get(url)
-		soup = BeautifulSoup(response.text, 'html.parser')
-		tag = soup.find("table", {"class":"table"})
-		info = tag.find_all('td')
-		vendor = info[1].text
-		client["vendor"] = vendor
-	return clients
+    def get_vendor_info(self, clients):
+        query = "https://www.ipchecktool.com/tool/macfinder?oui="
+        for client in clients:
+            url = query + client["mac"].replace(':', "%3A")
+            response = requests.get(url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            tag = soup.find("table", {"class":"table"})
+            info = tag.find_all('td')
+            vendor = info[1].text
+            client["vendor"] = vendor
+        return clients
 
 
 class ARPSpoof:
@@ -150,8 +168,10 @@ if __name__ == '__main__':
     gateway_ip = gateway_address()
     print(colored("[+] Gateway IP: {}".format(gateway_ip), "red"))
 
-    ip_range = "192.168.1.0/24"
-    clients = connected_clients(gateway_ip, ip_range)
+    args = get_arguments()
+    ip_range = args.ip_range
+    clients_info = ClientsInfo(ip_range)
+    clients = clients_info.connected_clients()
     gateway = clients[0]
     targets = prompt_for_targets(clients[1:])
     network = InternetControl()
