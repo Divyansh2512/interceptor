@@ -10,3 +10,6 @@ then interceptor should be able to run when you type
 ```
 sudo python3 interceptor.py -i {ip_range}
 ```
+
+## Licence
+MIT 
